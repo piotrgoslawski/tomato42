@@ -1,0 +1,8 @@
+[package]
+name = "tomato42-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI driver for the tomato42 plant simulator"
+
+[dependencies]
+tomato42-core = { path = "../tomato42-core" }

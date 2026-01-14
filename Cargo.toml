@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "tomato42-core",
+    "tomato42-cli",
+    "tomato42-tui",
+]
+
+resolver = "2"

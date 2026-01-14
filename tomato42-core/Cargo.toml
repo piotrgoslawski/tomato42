@@ -1,0 +1,7 @@
+[package]
+name = "tomato42-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core simulation logic for the tomato42 plant simulator"
+
+[dependencies]

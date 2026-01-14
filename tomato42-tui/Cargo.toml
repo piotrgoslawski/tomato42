@@ -1,0 +1,11 @@
+[package]
+name = "tomato42-tui"
+version = "0.1.0"
+edition = "2021"
+description = "TUI overview with graphs for the tomato42 plant simulator"
+
+[dependencies]
+tomato42-core = { path = "../tomato42-core" }
+tui = "0.19"
+crossterm = "0.25"
+ringbuffer = "0.11"
