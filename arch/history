@@ -7,3 +7,5 @@ Asked AI to suggest IPC Communication method so external application can communi
 Prompt: [prompt_2](prompt_2.md)
 Result: Instead of proposition AI implemented simple communication using JSON over TCP - lets keep it for now
 
+Asked AI to use IPC Communication in CLI application
+Prompt
