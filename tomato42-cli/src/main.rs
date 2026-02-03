@@ -19,7 +19,7 @@ use serde::{Serialize, Deserialize};
 use serde_json::json;
 
 // Default port for the IPC server
-const DEFAULT_PORT: u16 = 8042;
+const DEFAULT_PORT: u16 = 8043;
 const DEFAULT_HOST: &str = "127.0.0.1";
 
 // Message types for IPC communication

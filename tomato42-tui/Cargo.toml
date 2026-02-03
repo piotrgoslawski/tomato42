@@ -9,3 +9,5 @@ tomato42-core = { path = "../tomato42-core" }
 tui = "0.19"
 crossterm = "0.25"
 ringbuffer = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

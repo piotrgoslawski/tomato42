@@ -361,6 +361,8 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "ringbuffer",
+ "serde",
+ "serde_json",
  "tomato42-core",
  "tui",
 ]

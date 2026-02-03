@@ -1,13 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tomato42_core::{Action, TomatoState, step};
 use serde::{Serialize, Deserialize};
 
 // Default port for the IPC server
-const DEFAULT_PORT: u16 = 8042;
+const DEFAULT_PORT: u16 = 8043;
 
 // Message types for IPC communication
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,8 +92,8 @@ async fn main() {
     println!("Starting tomato42 IPC server on port {}", port);
 
     // Create shared state
-    let state = Arc::new(Mutex::new(TomatoState::new()));
-    
+    let state = Arc::new(StdMutex::new(TomatoState::new()));
+
     // Create a broadcast channel for state updates
     let (tx, _) = broadcast::channel(16);
 
@@ -124,23 +125,27 @@ async fn main() {
 }
 
 async fn handle_connection(
-    mut socket: TcpStream,
-    state: Arc<Mutex<TomatoState>>,
+    socket: TcpStream,
+    state: Arc<StdMutex<TomatoState>>,
     tx: broadcast::Sender<IPCResponse>,
 ) {
-    let (reader, mut writer) = socket.split();
-    let mut reader = BufReader::new(reader);
+    // Split the socket into read and write halves
+    let (mut read_half, write_half) = socket.into_split();
+    let mut reader = BufReader::new(&mut read_half);
     let mut line = String::new();
-    
+
     // Subscribe to state updates
     let mut rx = tx.subscribe();
 
+    // Wrap the write half in an Arc<Mutex> to share between tasks
+    let write_half = Arc::new(Mutex::new(write_half));
+    let write_half_clone = Arc::clone(&write_half);
+
     // Spawn a task to listen for state updates and send them to the client
-    let writer_clone = writer.try_clone().unwrap();
     let update_task = tokio::spawn(async move {
-        let mut writer = writer_clone;
         while let Ok(response) = rx.recv().await {
             let json = serde_json::to_string(&response).unwrap();
+            let mut writer = write_half_clone.lock().await;
             if let Err(e) = writer.write_all(format!("{}\n", json).as_bytes()).await {
                 eprintln!("Failed to send update: {}", e);
                 break;
@@ -158,14 +163,16 @@ async fn handle_connection(
             }
             Ok(_) => {
                 let response = process_command(&line, &state).await;
-                
+
                 // Send the response to the client
                 let json = serde_json::to_string(&response).unwrap();
+                let mut writer = write_half.lock().await;
                 if let Err(e) = writer.write_all(format!("{}\n", json).as_bytes()).await {
                     eprintln!("Failed to send response: {}", e);
                     break;
                 }
-                
+                drop(writer); // Release the lock before broadcasting
+
                 // Broadcast the state update to all clients
                 let _ = tx.send(response);
             }
@@ -183,15 +190,15 @@ async fn handle_connection(
 
 async fn process_command(
     command: &str,
-    state: &Arc<Mutex<TomatoState>>,
+    state: &Arc<StdMutex<TomatoState>>,
 ) -> IPCResponse {
     // Parse the command as JSON
     let request: Result<IPCRequest, _> = serde_json::from_str(command);
-    
+
     match request {
         Ok(req) => {
             let mut state_guard = state.lock().unwrap();
-            
+
             match req {
                 IPCRequest::GetState => {
                     // Just return the current state
@@ -209,15 +216,15 @@ async fn process_command(
                         Action::DoNothing,
                         Duration::from_secs(seconds),
                     );
-                    
+
                     // Update the state
                     *state_guard = result.state.clone();
-                    
+
                     // Convert events
                     let events = result.events.iter()
                         .map(|e| SerializableTomatoEvent::from(e))
                         .collect();
-                    
+
                     IPCResponse {
                         success: true,
                         message: format!("Stepped simulation by {} seconds", seconds),
@@ -234,22 +241,22 @@ async fn process_command(
                             events: vec![],
                         };
                     }
-                    
+
                     // Apply the water action
                     let result = step(
                         state_guard.clone(),
                         Action::Water { amount },
                         Duration::from_secs(0),
                     );
-                    
+
                     // Update the state
                     *state_guard = result.state.clone();
-                    
+
                     // Convert events
                     let events = result.events.iter()
                         .map(|e| SerializableTomatoEvent::from(e))
                         .collect();
-                    
+
                     IPCResponse {
                         success: true,
                         message: format!("Watered plant with amount: {:.2}", amount),
@@ -266,22 +273,22 @@ async fn process_command(
                             events: vec![],
                         };
                     }
-                    
+
                     // Apply the set light action
                     let result = step(
                         state_guard.clone(),
                         Action::SetLight { level },
                         Duration::from_secs(0),
                     );
-                    
+
                     // Update the state
                     *state_guard = result.state.clone();
-                    
+
                     // Convert events
                     let events = result.events.iter()
                         .map(|e| SerializableTomatoEvent::from(e))
                         .collect();
-                    
+
                     IPCResponse {
                         success: true,
                         message: format!("Set light level to: {:.2}", level),
@@ -296,15 +303,15 @@ async fn process_command(
                         Action::SetTemp { celsius },
                         Duration::from_secs(0),
                     );
-                    
+
                     // Update the state
                     *state_guard = result.state.clone();
-                    
+
                     // Convert events
                     let events = result.events.iter()
                         .map(|e| SerializableTomatoEvent::from(e))
                         .collect();
-                    
+
                     IPCResponse {
                         success: true,
                         message: format!("Set temperature to: {:.2}°C", celsius),
