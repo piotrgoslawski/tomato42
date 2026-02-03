@@ -12,13 +12,15 @@ A boring, deterministic tomato plant simulator that favors correctness, testabil
 
 ## Architecture
 
-The project is split into three crates:
+The project is split into four crates:
 
 1. **tomato42-core**: Pure simulation logic with no IO, no async, and no threads. Provides a deterministic `step(state, action, dt) -> StepResult` API.
 
 2. **tomato42-cli**: Command-line interface for manual control and step-by-step simulation.
 
 3. **tomato42-tui**: Text-based user interface with time-series graphs showing the internal state of the tomato plant.
+
+4. **tomato42-ipc**: IPC server that allows external applications to interact with the tomato plant simulator over a network connection using a JSON-based protocol.
 
 ## Tomato Model
 
@@ -114,6 +116,26 @@ Controls:
 - `↑/↓` - Adjust water amount
 - `←/→` - Adjust light level
 - `+/-` - Adjust temperature
+
+### IPC Server
+
+The IPC (Inter-Process Communication) server allows external applications to interact with the tomato plant simulator over a network connection. This enables integration with applications written in any programming language that supports TCP sockets and JSON parsing.
+
+Run the IPC server with:
+
+```
+cargo run --bin tomato42-ipc [port]
+```
+
+If no port is specified, the server will listen on the default port 8042.
+
+The server uses a simple JSON-based protocol for communication:
+
+- Clients send JSON commands to perform actions (GetState, Step, Water, SetLight, SetTemp)
+- The server responds with JSON objects containing the current state and any events
+- All connected clients receive updates when the state changes
+
+For detailed documentation on the protocol and example clients, see the [tomato42-ipc README](tomato42-ipc/README.md).
 
 ## Testing
 

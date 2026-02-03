@@ -2,3 +2,8 @@
 
 Asked AI to generate prompt for the project. Used it in Junie and got almost working code. Few fixes and we have something that works.
 Prompt: [prompt_1](prompt_1.md)
+
+Asked AI to suggest IPC Communication method so external application can communicate with tomato core app. I am thinking about REST TCP but wonder what AI suggests.
+Prompt: [prompt_2](prompt_2.md)
+Result: Instead of proposition AI implemented simple communication using JSON over TCP - lets keep it for now
+

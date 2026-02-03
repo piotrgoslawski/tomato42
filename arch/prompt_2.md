@@ -1,0 +1,1 @@
+Propose IPC communication methode to allow external application communicate with core application
