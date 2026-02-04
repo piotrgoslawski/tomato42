@@ -25,11 +25,8 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use std::error::Error;
-use std::sync::{Arc, Mutex};
-use std::thread;
 use ringbuffer::RingBufferWrite;
 use ringbuffer::RingBufferExt;
-use serde::{Serialize, Deserialize};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -45,54 +42,17 @@ use tui::{
     widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Wrap},
     Frame, Terminal,
 };
-use ringbuffer::{AllocRingBuffer, RingBuffer};
+use ringbuffer::AllocRingBuffer;
 
 use tomato42_core::{Action, Event as TomatoEvent, Stage, TomatoState, step};
+use tomato42_protocol::{
+    DEFAULT_HOST, DEFAULT_PORT, IPCRequest, IPCResponse,
+    SerializableTomatoState, SerializableTomatoEvent,
+};
 
-// Default port for the IPC server
-const DEFAULT_PORT: u16 = 8043;
-const DEFAULT_HOST: &str = "127.0.0.1";
-const BUFFER_SIZE: usize = 100;
+const BUFFER_SIZE: usize = 128; // Must be power of 2
 
-// Message types for IPC communication
-#[derive(Debug, Serialize, Deserialize)]
-enum IPCRequest {
-    GetState,
-    Step { seconds: u64 },
-    Water { amount: f32 },
-    SetLight { level: f32 },
-    SetTemp { celsius: f32 },
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct IPCResponse {
-    success: bool,
-    message: String,
-    state: Option<SerializableTomatoState>,
-    events: Vec<SerializableTomatoEvent>,
-}
-
-// Serializable versions of the core types
-#[derive(Debug, Clone, Deserialize)]
-struct SerializableTomatoState {
-    time_seconds: u64,
-    stage: String,
-    soil_moisture: f32,
-    biomass: f32,
-    stress: f32,
-    health: f32,
-    temperature: f32,
-    light_level: f32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-enum SerializableTomatoEvent {
-    StageChange { from: String, to: String },
-    WiltRisk,
-    Death,
-}
-
-// Helper to convert string stage to Stage enum
+/// Helper to convert string stage to Stage enum
 fn string_to_stage(stage_str: &str) -> Stage {
     match stage_str {
         "Seed" => Stage::Seed,
@@ -105,7 +65,7 @@ fn string_to_stage(stage_str: &str) -> Stage {
     }
 }
 
-// Convert SerializableTomatoState to TomatoState
+/// Convert SerializableTomatoState to TomatoState
 fn to_tomato_state(serializable: &SerializableTomatoState) -> TomatoState {
     let mut state = TomatoState::new();
     state.time = Duration::from_secs(serializable.time_seconds);
@@ -119,7 +79,7 @@ fn to_tomato_state(serializable: &SerializableTomatoState) -> TomatoState {
     state
 }
 
-// Convert SerializableTomatoEvent to TomatoEvent
+/// Convert SerializableTomatoEvent to TomatoEvent
 fn to_tomato_event(serializable: &SerializableTomatoEvent) -> TomatoEvent {
     match serializable {
         SerializableTomatoEvent::StageChange { from, to } => {
@@ -133,13 +93,13 @@ fn to_tomato_event(serializable: &SerializableTomatoEvent) -> TomatoEvent {
     }
 }
 
-// IPC client to communicate with the server
+/// IPC client to communicate with the server
 struct IPCClient {
     stream: TcpStream,
 }
 
 impl IPCClient {
-    // Connect to the IPC server
+    /// Connect to the IPC server
     fn connect() -> Result<Self, io::Error> {
         let server_addr = format!("{}:{}", DEFAULT_HOST, DEFAULT_PORT);
         println!("Connecting to IPC server at {}...", server_addr);
@@ -158,7 +118,7 @@ impl IPCClient {
         }
     }
 
-    // Send a command to the server and get the response
+    /// Send a command to the server and get the response
     fn send_command(&mut self, request: IPCRequest) -> Result<IPCResponse, io::Error> {
         // Serialize the request to JSON
         let json = serde_json::to_string(&request)?;
@@ -196,11 +156,11 @@ struct HistoricalData {
 impl HistoricalData {
     fn new(capacity: usize) -> Self {
         Self {
-            time_points: AllocRingBuffer::new(),
-            soil_moisture: AllocRingBuffer::new(),
-            stress: AllocRingBuffer::new(),
-            health: AllocRingBuffer::new(),
-            biomass: AllocRingBuffer::new(),
+            time_points: AllocRingBuffer::with_capacity(capacity),
+            soil_moisture: AllocRingBuffer::with_capacity(capacity),
+            stress: AllocRingBuffer::with_capacity(capacity),
+            health: AllocRingBuffer::with_capacity(capacity),
+            biomass: AllocRingBuffer::with_capacity(capacity),
         }
     }
 
@@ -262,7 +222,7 @@ impl App {
 
                         // Convert events
                         let events = response.events.iter()
-                            .map(|e| to_tomato_event(e))
+                            .map(to_tomato_event)
                             .collect();
 
                         (tomato_state, events)
@@ -316,7 +276,7 @@ impl App {
 
                             // Convert events
                             self.last_events = response.events.iter()
-                                .map(|e| to_tomato_event(e))
+                                .map(to_tomato_event)
                                 .collect();
 
                             // Update historical data

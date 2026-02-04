@@ -2,7 +2,7 @@
 //!
 //! This application provides a command-line interface for manual control
 //! of the tomato plant simulator, allowing step-by-step simulation.
-//! 
+//!
 //! Instead of directly calling core functions, this CLI communicates with
 //! the tomato42-ipc server over a TCP connection. This allows for a clean
 //! separation between the CLI and the core simulation logic, and enables
@@ -15,50 +15,10 @@
 
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
-use serde::{Serialize, Deserialize};
-use serde_json::json;
-
-// Default port for the IPC server
-const DEFAULT_PORT: u16 = 8043;
-const DEFAULT_HOST: &str = "127.0.0.1";
-
-// Message types for IPC communication
-#[derive(Debug, Serialize, Deserialize)]
-enum IPCRequest {
-    GetState,
-    Step { seconds: u64 },
-    Water { amount: f32 },
-    SetLight { level: f32 },
-    SetTemp { celsius: f32 },
-}
-
-#[derive(Debug, Deserialize)]
-struct IPCResponse {
-    success: bool,
-    message: String,
-    state: Option<SerializableTomatoState>,
-    events: Vec<SerializableTomatoEvent>,
-}
-
-// Serializable versions of the core types
-#[derive(Debug, Deserialize)]
-struct SerializableTomatoState {
-    time_seconds: u64,
-    stage: String,
-    soil_moisture: f32,
-    biomass: f32,
-    stress: f32,
-    health: f32,
-    temperature: f32,
-    light_level: f32,
-}
-
-#[derive(Debug, Deserialize)]
-enum SerializableTomatoEvent {
-    StageChange { from: String, to: String },
-    WiltRisk,
-    Death,
-}
+use tomato42_protocol::{
+    DEFAULT_HOST, DEFAULT_PORT, IPCRequest, IPCResponse,
+    SerializableTomatoState, SerializableTomatoEvent,
+};
 
 /// Connects to the IPC server and returns a TCP stream
 fn connect_to_server() -> Result<TcpStream, io::Error> {
@@ -173,10 +133,8 @@ fn main() {
                         match send_command(&mut stream, IPCRequest::Water { amount }) {
                             Ok(response) => {
                                 if response.success {
-                                    if let Some(state) = response.state {
-                                        print_events(&response.events);
-                                        println!("{}", response.message);
-                                    }
+                                    print_events(&response.events);
+                                    println!("{}", response.message);
                                 } else {
                                     println!("Error: {}", response.message);
                                 }
@@ -203,10 +161,8 @@ fn main() {
                         match send_command(&mut stream, IPCRequest::SetLight { level }) {
                             Ok(response) => {
                                 if response.success {
-                                    if let Some(state) = response.state {
-                                        print_events(&response.events);
-                                        println!("{}", response.message);
-                                    }
+                                    print_events(&response.events);
+                                    println!("{}", response.message);
                                 } else {
                                     println!("Error: {}", response.message);
                                 }
@@ -228,10 +184,8 @@ fn main() {
                         match send_command(&mut stream, IPCRequest::SetTemp { celsius }) {
                             Ok(response) => {
                                 if response.success {
-                                    if let Some(state) = response.state {
-                                        print_events(&response.events);
-                                        println!("{}", response.message);
-                                    }
+                                    print_events(&response.events);
+                                    println!("{}", response.message);
                                 } else {
                                     println!("Error: {}", response.message);
                                 }
@@ -258,10 +212,8 @@ fn main() {
                 match send_command(&mut stream, IPCRequest::Step { seconds }) {
                     Ok(response) => {
                         if response.success {
-                            if let Some(state) = response.state {
-                                print_events(&response.events);
-                                println!("{}", response.message);
-                            }
+                            print_events(&response.events);
+                            println!("{}", response.message);
                         } else {
                             println!("Error: {}", response.message);
                         }

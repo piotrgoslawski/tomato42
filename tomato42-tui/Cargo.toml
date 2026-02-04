@@ -6,8 +6,8 @@ description = "TUI overview with graphs for the tomato42 plant simulator"
 
 [dependencies]
 tomato42-core = { path = "../tomato42-core" }
+tomato42-protocol = { path = "../tomato42-protocol" }
 tui = "0.19"
 crossterm = "0.25"
 ringbuffer = "0.11"
-serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

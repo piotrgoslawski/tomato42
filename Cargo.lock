@@ -336,9 +336,8 @@ dependencies = [
 name = "tomato42-cli"
 version = "0.1.0"
 dependencies = [
- "serde",
  "serde_json",
- "tomato42-core",
+ "tomato42-protocol",
 ]
 
 [[package]]
@@ -353,6 +352,14 @@ dependencies = [
  "serde_json",
  "tokio",
  "tomato42-core",
+ "tomato42-protocol",
+]
+
+[[package]]
+name = "tomato42-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -361,9 +368,9 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "ringbuffer",
- "serde",
  "serde_json",
  "tomato42-core",
+ "tomato42-protocol",
  "tui",
 ]
 

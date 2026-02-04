@@ -1,81 +1,43 @@
+//! IPC server for the tomato42 plant simulator.
+//!
+//! This server allows multiple clients to connect and interact with a shared
+//! tomato plant simulation instance over TCP.
+
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 use tomato42_core::{Action, TomatoState, step};
-use serde::{Serialize, Deserialize};
+use tomato42_protocol::{
+    DEFAULT_PORT, IPCRequest, IPCResponse, SerializableTomatoState, SerializableTomatoEvent,
+};
 
-// Default port for the IPC server
-const DEFAULT_PORT: u16 = 8043;
-
-// Message types for IPC communication
-#[derive(Debug, Serialize, Deserialize)]
-enum IPCRequest {
-    GetState,
-    Step { seconds: u64 },
-    Water { amount: f32 },
-    SetLight { level: f32 },
-    SetTemp { celsius: f32 },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct IPCResponse {
-    success: bool,
-    message: String,
-    state: Option<SerializableTomatoState>,
-    events: Vec<SerializableTomatoEvent>,
-}
-
-// Serializable versions of the core types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SerializableTomatoState {
-    time_seconds: u64,
-    stage: String,
-    soil_moisture: f32,
-    biomass: f32,
-    stress: f32,
-    health: f32,
-    temperature: f32,
-    light_level: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum SerializableTomatoEvent {
-    StageChange { from: String, to: String },
-    WiltRisk,
-    Death,
-}
-
-// Convert between core and serializable types
-impl From<&TomatoState> for SerializableTomatoState {
-    fn from(state: &TomatoState) -> Self {
-        Self {
-            time_seconds: state.time.as_secs(),
-            stage: format!("{:?}", state.stage),
-            soil_moisture: state.soil_moisture,
-            biomass: state.biomass,
-            stress: state.stress,
-            health: state.health,
-            temperature: state.temperature,
-            light_level: state.light_level,
-        }
+/// Convert a TomatoState to its serializable representation.
+fn to_serializable_state(state: &TomatoState) -> SerializableTomatoState {
+    SerializableTomatoState {
+        time_seconds: state.time.as_secs(),
+        stage: format!("{:?}", state.stage),
+        soil_moisture: state.soil_moisture,
+        biomass: state.biomass,
+        stress: state.stress,
+        health: state.health,
+        temperature: state.temperature,
+        light_level: state.light_level,
     }
 }
 
-impl From<&tomato42_core::Event> for SerializableTomatoEvent {
-    fn from(event: &tomato42_core::Event) -> Self {
-        match event {
-            tomato42_core::Event::StageChange { from, to } => {
-                SerializableTomatoEvent::StageChange {
-                    from: format!("{:?}", from),
-                    to: format!("{:?}", to),
-                }
+/// Convert a core Event to its serializable representation.
+fn to_serializable_event(event: &tomato42_core::Event) -> SerializableTomatoEvent {
+    match event {
+        tomato42_core::Event::StageChange { from, to } => {
+            SerializableTomatoEvent::StageChange {
+                from: format!("{:?}", from),
+                to: format!("{:?}", to),
             }
-            tomato42_core::Event::WiltRisk => SerializableTomatoEvent::WiltRisk,
-            tomato42_core::Event::Death => SerializableTomatoEvent::Death,
         }
+        tomato42_core::Event::WiltRisk => SerializableTomatoEvent::WiltRisk,
+        tomato42_core::Event::Death => SerializableTomatoEvent::Death,
     }
 }
 
@@ -91,11 +53,8 @@ async fn main() {
 
     println!("Starting tomato42 IPC server on port {}", port);
 
-    // Create shared state
-    let state = Arc::new(StdMutex::new(TomatoState::new()));
-
-    // Create a broadcast channel for state updates
-    let (tx, _) = broadcast::channel(16);
+    // Create shared state using tokio's async-safe Mutex
+    let state = Arc::new(Mutex::new(TomatoState::new()));
 
     // Bind to the specified port
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await.unwrap();
@@ -113,45 +72,23 @@ async fn main() {
 
         println!("New connection from: {}", addr);
 
-        // Clone the state and sender for this connection
+        // Clone the state for this connection
         let state_clone = Arc::clone(&state);
-        let tx_clone = tx.clone();
 
         // Spawn a new task to handle this connection
         tokio::spawn(async move {
-            handle_connection(socket, state_clone, tx_clone).await;
+            handle_connection(socket, state_clone).await;
         });
     }
 }
 
 async fn handle_connection(
     socket: TcpStream,
-    state: Arc<StdMutex<TomatoState>>,
-    tx: broadcast::Sender<IPCResponse>,
+    state: Arc<Mutex<TomatoState>>,
 ) {
-    // Split the socket into read and write halves
-    let (mut read_half, write_half) = socket.into_split();
-    let mut reader = BufReader::new(&mut read_half);
+    let (read_half, mut write_half) = socket.into_split();
+    let mut reader = BufReader::new(read_half);
     let mut line = String::new();
-
-    // Subscribe to state updates
-    let mut rx = tx.subscribe();
-
-    // Wrap the write half in an Arc<Mutex> to share between tasks
-    let write_half = Arc::new(Mutex::new(write_half));
-    let write_half_clone = Arc::clone(&write_half);
-
-    // Spawn a task to listen for state updates and send them to the client
-    let update_task = tokio::spawn(async move {
-        while let Ok(response) = rx.recv().await {
-            let json = serde_json::to_string(&response).unwrap();
-            let mut writer = write_half_clone.lock().await;
-            if let Err(e) = writer.write_all(format!("{}\n", json).as_bytes()).await {
-                eprintln!("Failed to send update: {}", e);
-                break;
-            }
-        }
-    });
 
     // Process commands from the client
     loop {
@@ -166,15 +103,10 @@ async fn handle_connection(
 
                 // Send the response to the client
                 let json = serde_json::to_string(&response).unwrap();
-                let mut writer = write_half.lock().await;
-                if let Err(e) = writer.write_all(format!("{}\n", json).as_bytes()).await {
+                if let Err(e) = write_half.write_all(format!("{}\n", json).as_bytes()).await {
                     eprintln!("Failed to send response: {}", e);
                     break;
                 }
-                drop(writer); // Release the lock before broadcasting
-
-                // Broadcast the state update to all clients
-                let _ = tx.send(response);
             }
             Err(e) => {
                 eprintln!("Failed to read from socket: {}", e);
@@ -183,21 +115,19 @@ async fn handle_connection(
         }
     }
 
-    // Cancel the update task when the connection is closed
-    update_task.abort();
     println!("Connection closed");
 }
 
 async fn process_command(
     command: &str,
-    state: &Arc<StdMutex<TomatoState>>,
+    state: &Arc<Mutex<TomatoState>>,
 ) -> IPCResponse {
     // Parse the command as JSON
     let request: Result<IPCRequest, _> = serde_json::from_str(command);
 
     match request {
         Ok(req) => {
-            let mut state_guard = state.lock().unwrap();
+            let mut state_guard = state.lock().await;
 
             match req {
                 IPCRequest::GetState => {
@@ -205,7 +135,7 @@ async fn process_command(
                     IPCResponse {
                         success: true,
                         message: "Current state".to_string(),
-                        state: Some(SerializableTomatoState::from(&*state_guard)),
+                        state: Some(to_serializable_state(&*state_guard)),
                         events: vec![],
                     }
                 }
@@ -222,13 +152,13 @@ async fn process_command(
 
                     // Convert events
                     let events = result.events.iter()
-                        .map(|e| SerializableTomatoEvent::from(e))
+                        .map(to_serializable_event)
                         .collect();
 
                     IPCResponse {
                         success: true,
                         message: format!("Stepped simulation by {} seconds", seconds),
-                        state: Some(SerializableTomatoState::from(&*state_guard)),
+                        state: Some(to_serializable_state(&*state_guard)),
                         events,
                     }
                 }
@@ -237,7 +167,7 @@ async fn process_command(
                         return IPCResponse {
                             success: false,
                             message: "Water amount must be between 0 and 1".to_string(),
-                            state: Some(SerializableTomatoState::from(&*state_guard)),
+                            state: Some(to_serializable_state(&*state_guard)),
                             events: vec![],
                         };
                     }
@@ -254,13 +184,13 @@ async fn process_command(
 
                     // Convert events
                     let events = result.events.iter()
-                        .map(|e| SerializableTomatoEvent::from(e))
+                        .map(to_serializable_event)
                         .collect();
 
                     IPCResponse {
                         success: true,
                         message: format!("Watered plant with amount: {:.2}", amount),
-                        state: Some(SerializableTomatoState::from(&*state_guard)),
+                        state: Some(to_serializable_state(&*state_guard)),
                         events,
                     }
                 }
@@ -269,7 +199,7 @@ async fn process_command(
                         return IPCResponse {
                             success: false,
                             message: "Light level must be between 0 and 1".to_string(),
-                            state: Some(SerializableTomatoState::from(&*state_guard)),
+                            state: Some(to_serializable_state(&*state_guard)),
                             events: vec![],
                         };
                     }
@@ -286,13 +216,13 @@ async fn process_command(
 
                     // Convert events
                     let events = result.events.iter()
-                        .map(|e| SerializableTomatoEvent::from(e))
+                        .map(to_serializable_event)
                         .collect();
 
                     IPCResponse {
                         success: true,
                         message: format!("Set light level to: {:.2}", level),
-                        state: Some(SerializableTomatoState::from(&*state_guard)),
+                        state: Some(to_serializable_state(&*state_guard)),
                         events,
                     }
                 }
@@ -309,13 +239,13 @@ async fn process_command(
 
                     // Convert events
                     let events = result.events.iter()
-                        .map(|e| SerializableTomatoEvent::from(e))
+                        .map(to_serializable_event)
                         .collect();
 
                     IPCResponse {
                         success: true,
                         message: format!("Set temperature to: {:.2}°C", celsius),
-                        state: Some(SerializableTomatoState::from(&*state_guard)),
+                        state: Some(to_serializable_state(&*state_guard)),
                         events,
                     }
                 }
