@@ -5,4 +5,5 @@ edition = "2021"
 description = "CLI driver for the tomato42 plant simulator"
 
 [dependencies]
-tomato42-core = { path = "../tomato42-core" }
+tomato42-protocol = { path = "../tomato42-protocol" }
+serde_json = "1.0"

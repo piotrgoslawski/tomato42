@@ -2,10 +2,67 @@
 //!
 //! This application provides a command-line interface for manual control
 //! of the tomato plant simulator, allowing step-by-step simulation.
+//!
+//! Instead of directly calling core functions, this CLI communicates with
+//! the tomato42-ipc server over a TCP connection. This allows for a clean
+//! separation between the CLI and the core simulation logic, and enables
+//! multiple clients to interact with the same simulation instance.
+//!
+//! Before running this CLI, make sure the tomato42-ipc server is running:
+//! ```
+//! cargo run --bin tomato42-ipc
+//! ```
 
-use std::io::{self, Write};
-use std::time::Duration;
-use tomato42_core::{Action, Event, TomatoState, step};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::TcpStream;
+use tomato42_protocol::{
+    DEFAULT_HOST, DEFAULT_PORT, IPCRequest, IPCResponse,
+    SerializableTomatoState, SerializableTomatoEvent,
+};
+
+/// Connects to the IPC server and returns a TCP stream
+fn connect_to_server() -> Result<TcpStream, io::Error> {
+    let server_addr = format!("{}:{}", DEFAULT_HOST, DEFAULT_PORT);
+    println!("Connecting to IPC server at {}...", server_addr);
+
+    match TcpStream::connect(&server_addr) {
+        Ok(stream) => {
+            println!("Connected to IPC server");
+            Ok(stream)
+        },
+        Err(e) => {
+            eprintln!("Failed to connect to IPC server: {}", e);
+            eprintln!("Make sure the tomato42-ipc server is running with:");
+            eprintln!("  cargo run --bin tomato42-ipc");
+            Err(e)
+        }
+    }
+}
+
+/// Sends a command to the IPC server and returns the response
+fn send_command(stream: &mut TcpStream, request: IPCRequest) -> Result<IPCResponse, io::Error> {
+    // Serialize the request to JSON
+    let json = serde_json::to_string(&request)?;
+
+    // Send the request to the server
+    stream.write_all(format!("{}\n", json).as_bytes())?;
+    stream.flush()?;
+
+    // Read the response
+    let mut response_str = String::new();
+    let mut reader = BufReader::new(stream.try_clone()?);
+    reader.read_line(&mut response_str)?;
+
+    // Deserialize the response
+    match serde_json::from_str(&response_str) {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            eprintln!("Failed to parse server response: {}", e);
+            eprintln!("Response was: {}", response_str);
+            Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid server response"))
+        }
+    }
+}
 
 fn main() {
     println!("Tomato42 CLI - Deterministic Tomato Plant Simulator");
@@ -20,8 +77,29 @@ fn main() {
     println!("  exit               - Exit the simulator");
     println!();
 
-    let mut state = TomatoState::new();
-    print_status(&state);
+    // Connect to the IPC server
+    let mut stream = match connect_to_server() {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("Exiting due to connection failure");
+            return;
+        }
+    };
+
+    // Get initial state
+    match send_command(&mut stream, IPCRequest::GetState) {
+        Ok(response) => {
+            if let Some(state) = response.state {
+                print_status(&state);
+            } else {
+                eprintln!("Failed to get initial state");
+            }
+        },
+        Err(e) => {
+            eprintln!("Error getting initial state: {}", e);
+            return;
+        }
+    }
 
     loop {
         print!("> ");
@@ -44,18 +122,25 @@ fn main() {
                     println!("Error: Missing amount parameter");
                     continue;
                 }
-                
+
                 match parts[1].parse::<f32>() {
                     Ok(amount) => {
                         if amount < 0.0 || amount > 1.0 {
                             println!("Error: Amount must be between 0 and 1");
                             continue;
                         }
-                        
-                        let result = step(state, Action::Water { amount }, Duration::from_secs(0));
-                        state = result.state;
-                        print_events(&result.events);
-                        println!("Watered plant with amount: {:.2}", amount);
+
+                        match send_command(&mut stream, IPCRequest::Water { amount }) {
+                            Ok(response) => {
+                                if response.success {
+                                    print_events(&response.events);
+                                    println!("{}", response.message);
+                                } else {
+                                    println!("Error: {}", response.message);
+                                }
+                            },
+                            Err(e) => println!("Error communicating with server: {}", e),
+                        }
                     },
                     Err(_) => println!("Error: Invalid amount value"),
                 }
@@ -65,18 +150,25 @@ fn main() {
                     println!("Error: Missing level parameter");
                     continue;
                 }
-                
+
                 match parts[1].parse::<f32>() {
                     Ok(level) => {
                         if level < 0.0 || level > 1.0 {
                             println!("Error: Level must be between 0 and 1");
                             continue;
                         }
-                        
-                        let result = step(state, Action::SetLight { level }, Duration::from_secs(0));
-                        state = result.state;
-                        print_events(&result.events);
-                        println!("Set light level to: {:.2}", level);
+
+                        match send_command(&mut stream, IPCRequest::SetLight { level }) {
+                            Ok(response) => {
+                                if response.success {
+                                    print_events(&response.events);
+                                    println!("{}", response.message);
+                                } else {
+                                    println!("Error: {}", response.message);
+                                }
+                            },
+                            Err(e) => println!("Error communicating with server: {}", e),
+                        }
                     },
                     Err(_) => println!("Error: Invalid level value"),
                 }
@@ -86,13 +178,20 @@ fn main() {
                     println!("Error: Missing temperature parameter");
                     continue;
                 }
-                
+
                 match parts[1].parse::<f32>() {
                     Ok(celsius) => {
-                        let result = step(state, Action::SetTemp { celsius }, Duration::from_secs(0));
-                        state = result.state;
-                        print_events(&result.events);
-                        println!("Set temperature to: {:.2}°C", celsius);
+                        match send_command(&mut stream, IPCRequest::SetTemp { celsius }) {
+                            Ok(response) => {
+                                if response.success {
+                                    print_events(&response.events);
+                                    println!("{}", response.message);
+                                } else {
+                                    println!("Error: {}", response.message);
+                                }
+                            },
+                            Err(e) => println!("Error communicating with server: {}", e),
+                        }
                     },
                     Err(_) => println!("Error: Invalid temperature value"),
                 }
@@ -109,14 +208,32 @@ fn main() {
                 } else {
                     1
                 };
-                
-                let result = step(state, Action::DoNothing, Duration::from_secs(seconds));
-                state = result.state;
-                print_events(&result.events);
-                println!("Advanced simulation by {} seconds", seconds);
+
+                match send_command(&mut stream, IPCRequest::Step { seconds }) {
+                    Ok(response) => {
+                        if response.success {
+                            print_events(&response.events);
+                            println!("{}", response.message);
+                        } else {
+                            println!("Error: {}", response.message);
+                        }
+                    },
+                    Err(e) => println!("Error communicating with server: {}", e),
+                }
             },
             "status" => {
-                print_status(&state);
+                match send_command(&mut stream, IPCRequest::GetState) {
+                    Ok(response) => {
+                        if response.success {
+                            if let Some(state) = response.state {
+                                print_status(&state);
+                            }
+                        } else {
+                            println!("Error: {}", response.message);
+                        }
+                    },
+                    Err(e) => println!("Error communicating with server: {}", e),
+                }
             },
             "help" => {
                 println!("Commands:");
@@ -141,11 +258,11 @@ fn main() {
 }
 
 /// Prints the current status of the tomato plant.
-fn print_status(state: &TomatoState) {
+fn print_status(state: &SerializableTomatoState) {
     println!("\nTomato Plant Status:");
     println!("-------------------");
-    println!("Time:          {} seconds", state.time.as_secs());
-    println!("Stage:         {:?}", state.stage);
+    println!("Time:          {} seconds", state.time_seconds);
+    println!("Stage:         {}", state.stage);
     println!("Soil Moisture: {:.2}", state.soil_moisture);
     println!("Biomass:       {:.2}", state.biomass);
     println!("Stress:        {:.2}", state.stress);
@@ -156,21 +273,21 @@ fn print_status(state: &TomatoState) {
 }
 
 /// Prints events that occurred during a simulation step.
-fn print_events(events: &[Event]) {
+fn print_events(events: &[SerializableTomatoEvent]) {
     if events.is_empty() {
         return;
     }
-    
+
     println!("\nEvents:");
     for event in events {
         match event {
-            Event::StageChange { from, to } => {
-                println!("  Plant advanced from {:?} to {:?} stage", from, to);
+            SerializableTomatoEvent::StageChange { from, to } => {
+                println!("  Plant advanced from {} to {} stage", from, to);
             },
-            Event::WiltRisk => {
+            SerializableTomatoEvent::WiltRisk => {
                 println!("  WARNING: Plant is at risk of wilting due to high stress!");
             },
-            Event::Death => {
+            SerializableTomatoEvent::Death => {
                 println!("  ALERT: Plant has died!");
             },
         }

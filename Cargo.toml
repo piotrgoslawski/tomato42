@@ -3,6 +3,8 @@ members = [
     "tomato42-core",
     "tomato42-cli",
     "tomato42-tui",
+    "tomato42-ipc",
+    "tomato42-protocol",
 ]
 
 resolver = "2"

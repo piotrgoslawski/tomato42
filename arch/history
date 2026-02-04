@@ -2,3 +2,15 @@
 
 Asked AI to generate prompt for the project. Used it in Junie and got almost working code. Few fixes and we have something that works.
 Prompt: [prompt_1](prompt_1.md)
+
+Asked AI to suggest IPC Communication method so external application can communicate with tomato core app. I am thinking about REST TCP but wonder what AI suggests.
+Prompt: [prompt_2](prompt_2.md)
+Result: Instead of proposition AI implemented simple communication using JSON over TCP - lets keep it for now
+Again there are some non existing functions 
+
+Asked AI to use IPC Communication in CLI application. Fixed some errors using AI.
+Started application - CLI works like shit (but works) and TUI displays updated values so I guess verdict so far - something is working but not perfectly.
+
+Yesterday I tried to plan what the system should do in the evening. And then I discovered that place in my mind where the system shoudl be present is empty. Could not reason about my app befrore going to sleep.
+
+Allowed claude to do review and apply "critical" changes - hoped it will fix the invalid response from IPC. Instead it broke TUI app :D - it crashes when creating historical data.

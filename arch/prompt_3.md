@@ -1,0 +1,1 @@
+Make the CLI appliction use IPC instead of directly calling core functions.

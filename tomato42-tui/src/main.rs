@@ -2,8 +2,27 @@
 //!
 //! This application provides a text-based user interface with time-series graphs
 //! showing the internal state of the tomato plant.
+//!
+//! This TUI communicates with the tomato42-ipc server over a TCP connection,
+//! allowing it to run in parallel with other clients like the CLI application.
+//! Multiple clients can interact with the same simulation instance simultaneously.
+//!
+//! Before running this TUI, make sure the tomato42-ipc server is running:
+//! ```
+//! cargo run --bin tomato42-ipc
+//! ```
+//!
+//! If the IPC server is not available, the TUI will automatically fall back to
+//! standalone mode, using the local simulation engine. This ensures the application
+//! remains functional even without the IPC server, but it won't be synchronized
+//! with other clients.
+//!
+//! The connection status is displayed in the status bar:
+//! - "Connected" - Successfully connected to the IPC server
+//! - "Standalone" - Running in standalone mode (local simulation)
 
-use std::io;
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use std::error::Error;
 use ringbuffer::RingBufferWrite;
@@ -23,11 +42,107 @@ use tui::{
     widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Wrap},
     Frame, Terminal,
 };
-use ringbuffer::{AllocRingBuffer, RingBuffer};
+use ringbuffer::AllocRingBuffer;
 
 use tomato42_core::{Action, Event as TomatoEvent, Stage, TomatoState, step};
+use tomato42_protocol::{
+    DEFAULT_HOST, DEFAULT_PORT, IPCRequest, IPCResponse,
+    SerializableTomatoState, SerializableTomatoEvent,
+};
 
-const BUFFER_SIZE: usize = 100;
+const BUFFER_SIZE: usize = 128; // Must be power of 2
+
+/// Helper to convert string stage to Stage enum
+fn string_to_stage(stage_str: &str) -> Stage {
+    match stage_str {
+        "Seed" => Stage::Seed,
+        "Seedling" => Stage::Seedling,
+        "Vegetative" => Stage::Vegetative,
+        "Flowering" => Stage::Flowering,
+        "Fruiting" => Stage::Fruiting,
+        "Dead" => Stage::Dead,
+        _ => Stage::Seed, // Default
+    }
+}
+
+/// Convert SerializableTomatoState to TomatoState
+fn to_tomato_state(serializable: &SerializableTomatoState) -> TomatoState {
+    let mut state = TomatoState::new();
+    state.time = Duration::from_secs(serializable.time_seconds);
+    state.stage = string_to_stage(&serializable.stage);
+    state.soil_moisture = serializable.soil_moisture;
+    state.biomass = serializable.biomass;
+    state.stress = serializable.stress;
+    state.health = serializable.health;
+    state.temperature = serializable.temperature;
+    state.light_level = serializable.light_level;
+    state
+}
+
+/// Convert SerializableTomatoEvent to TomatoEvent
+fn to_tomato_event(serializable: &SerializableTomatoEvent) -> TomatoEvent {
+    match serializable {
+        SerializableTomatoEvent::StageChange { from, to } => {
+            TomatoEvent::StageChange {
+                from: string_to_stage(from),
+                to: string_to_stage(to),
+            }
+        }
+        SerializableTomatoEvent::WiltRisk => TomatoEvent::WiltRisk,
+        SerializableTomatoEvent::Death => TomatoEvent::Death,
+    }
+}
+
+/// IPC client to communicate with the server
+struct IPCClient {
+    stream: TcpStream,
+}
+
+impl IPCClient {
+    /// Connect to the IPC server
+    fn connect() -> Result<Self, io::Error> {
+        let server_addr = format!("{}:{}", DEFAULT_HOST, DEFAULT_PORT);
+        println!("Connecting to IPC server at {}...", server_addr);
+
+        match TcpStream::connect(&server_addr) {
+            Ok(stream) => {
+                println!("Connected to IPC server");
+                Ok(Self { stream })
+            },
+            Err(e) => {
+                eprintln!("Failed to connect to IPC server: {}", e);
+                eprintln!("Make sure the tomato42-ipc server is running with:");
+                eprintln!("  cargo run --bin tomato42-ipc");
+                Err(e)
+            }
+        }
+    }
+
+    /// Send a command to the server and get the response
+    fn send_command(&mut self, request: IPCRequest) -> Result<IPCResponse, io::Error> {
+        // Serialize the request to JSON
+        let json = serde_json::to_string(&request)?;
+
+        // Send the request to the server
+        self.stream.write_all(format!("{}\n", json).as_bytes())?;
+        self.stream.flush()?;
+
+        // Read the response
+        let mut response_str = String::new();
+        let mut reader = BufReader::new(self.stream.try_clone()?);
+        reader.read_line(&mut response_str)?;
+
+        // Deserialize the response
+        match serde_json::from_str(&response_str) {
+            Ok(response) => Ok(response),
+            Err(e) => {
+                eprintln!("Failed to parse server response: {}", e);
+                eprintln!("Response was: {}", response_str);
+                Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid server response"))
+            }
+        }
+    }
+}
 
 /// Stores historical data for graphing
 struct HistoricalData {
@@ -41,11 +156,11 @@ struct HistoricalData {
 impl HistoricalData {
     fn new(capacity: usize) -> Self {
         Self {
-            time_points: AllocRingBuffer::new(),
-            soil_moisture: AllocRingBuffer::new(),
-            stress: AllocRingBuffer::new(),
-            health: AllocRingBuffer::new(),
-            biomass: AllocRingBuffer::new(),
+            time_points: AllocRingBuffer::with_capacity(capacity),
+            soil_moisture: AllocRingBuffer::with_capacity(capacity),
+            stress: AllocRingBuffer::with_capacity(capacity),
+            health: AllocRingBuffer::with_capacity(capacity),
+            biomass: AllocRingBuffer::with_capacity(capacity),
         }
     }
 
@@ -79,18 +194,55 @@ struct App {
     water_amount: f32,
     light_level: f32,
     temperature: f32,
+    ipc_client: Option<IPCClient>,
+    connection_error: Option<String>,
 }
 
 impl App {
     fn new() -> Self {
+        // Try to connect to the IPC server
+        let (mut ipc_client, connection_error) = match IPCClient::connect() {
+            Ok(client) => (Some(client), None),
+            Err(e) => (None, Some(format!("Failed to connect to IPC server: {}", e))),
+        };
+
+        // Initialize with local state if we couldn't connect
         let state = TomatoState::new();
         let mut historical_data = HistoricalData::new(BUFFER_SIZE);
         historical_data.add_data_point(&state);
 
+        // If we have a client, try to get the initial state from the server
+        let (state, last_events) = if let Some(client) = &mut ipc_client {
+            match client.send_command(IPCRequest::GetState) {
+                Ok(response) => {
+                    if let Some(server_state) = response.state {
+                        let tomato_state = to_tomato_state(&server_state);
+                        historical_data = HistoricalData::new(BUFFER_SIZE);
+                        historical_data.add_data_point(&tomato_state);
+
+                        // Convert events
+                        let events = response.events.iter()
+                            .map(to_tomato_event)
+                            .collect();
+
+                        (tomato_state, events)
+                    } else {
+                        (state, Vec::new())
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Error getting initial state from server: {}", e);
+                    (state, Vec::new())
+                }
+            }
+        } else {
+            (state, Vec::new())
+        };
+
         Self {
             state,
             historical_data,
-            last_events: Vec::new(),
+            last_events,
             last_update: Instant::now(),
             auto_step: false,
             auto_step_interval: Duration::from_millis(500),
@@ -98,15 +250,64 @@ impl App {
             water_amount: 0.5,
             light_level: 0.5,
             temperature: 20.0,
+            ipc_client,
+            connection_error,
         }
     }
 
     fn step(&mut self) {
-        let result = step(self.state.clone(), self.selected_action, Duration::from_secs(1));
-        self.state = result.state.clone();
-        self.last_events = result.events;
-        self.historical_data.add_data_point(&self.state);
-        self.selected_action = Action::DoNothing; // Reset to DoNothing after each step
+        // If we have an IPC client, use it
+        if let Some(client) = &mut self.ipc_client {
+            // Convert the selected action to an IPC request
+            let request = match self.selected_action {
+                Action::DoNothing => IPCRequest::Step { seconds: 1 },
+                Action::Water { amount } => IPCRequest::Water { amount },
+                Action::SetLight { level } => IPCRequest::SetLight { level },
+                Action::SetTemp { celsius } => IPCRequest::SetTemp { celsius },
+            };
+
+            // Send the command to the server
+            match client.send_command(request) {
+                Ok(response) => {
+                    if response.success {
+                        if let Some(server_state) = response.state {
+                            // Update our local state
+                            self.state = to_tomato_state(&server_state);
+
+                            // Convert events
+                            self.last_events = response.events.iter()
+                                .map(to_tomato_event)
+                                .collect();
+
+                            // Update historical data
+                            self.historical_data.add_data_point(&self.state);
+                        }
+                    } else {
+                        eprintln!("Server error: {}", response.message);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Error communicating with server: {}", e);
+                    self.connection_error = Some(format!("Lost connection to server: {}", e));
+                    self.ipc_client = None;
+
+                    // Fall back to local simulation if we lose connection
+                    let result = step(self.state.clone(), self.selected_action, Duration::from_secs(1));
+                    self.state = result.state.clone();
+                    self.last_events = result.events;
+                    self.historical_data.add_data_point(&self.state);
+                }
+            }
+        } else {
+            // Fall back to local simulation if we don't have a client
+            let result = step(self.state.clone(), self.selected_action, Duration::from_secs(1));
+            self.state = result.state.clone();
+            self.last_events = result.events;
+            self.historical_data.add_data_point(&self.state);
+        }
+
+        // Reset to DoNothing after each step
+        self.selected_action = Action::DoNothing;
     }
 
     fn update(&mut self) -> bool {
@@ -121,6 +322,10 @@ impl App {
     fn toggle_auto_step(&mut self) {
         self.auto_step = !self.auto_step;
         self.last_update = Instant::now();
+    }
+
+    fn is_connected(&self) -> bool {
+        self.ipc_client.is_some()
     }
 }
 
@@ -255,7 +460,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
 }
 
 fn render_status<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
-    let status_text = vec![
+    let mut status_text = vec![
         Spans::from(vec![
             Span::raw("Stage: "),
             Span::styled(
@@ -269,6 +474,11 @@ fn render_status<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
                 if app.auto_step { "ON" } else { "OFF" },
                 Style::default().fg(if app.auto_step { Color::Green } else { Color::Red }),
             ),
+            Span::raw(" | IPC: "),
+            Span::styled(
+                if app.is_connected() { "Connected" } else { "Standalone" },
+                Style::default().fg(if app.is_connected() { Color::Green } else { Color::Yellow }),
+            ),
         ]),
         Spans::from(vec![
             Span::raw("Temperature: "),
@@ -277,6 +487,14 @@ fn render_status<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             Span::raw(format!("{:.2}", app.state.light_level)),
         ]),
     ];
+
+    // Add error message if there is one
+    if let Some(error) = &app.connection_error {
+        status_text.push(Spans::from(vec![
+            Span::styled("Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(error),
+        ]));
+    }
 
     let status = Paragraph::new(status_text)
         .block(Block::default().title("Status").borders(Borders::ALL))
@@ -293,12 +511,12 @@ fn render_chart<B: Backend>(
     area: Rect,
 ) {
     let data = app.historical_data.get_data_points(data_buffer);
-    
+
     // Find min/max values for y-axis
     let min_y = data.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
     let max_y = data.iter().map(|(_, y)| *y).fold(f64::NEG_INFINITY, f64::max);
     let y_bounds = [min_y.max(0.0), max_y.max(1.0)];
-    
+
     // Find min/max values for x-axis
     let min_x = data.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
     let max_x = data.iter().map(|(x, _)| *x).fold(f64::NEG_INFINITY, f64::max);
@@ -363,7 +581,7 @@ fn render_controls<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
 
 fn render_events<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let mut event_text = Vec::new();
-    
+
     if app.last_events.is_empty() {
         event_text.push(Spans::from(Span::raw("No recent events")));
     } else {
