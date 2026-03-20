@@ -135,7 +135,12 @@ The server uses a simple JSON-based protocol for communication:
 - The server responds with JSON objects containing the current state and any events
 - All connected clients receive updates when the state changes
 
-For detailed documentation on the protocol and example clients, see the [tomato42-ipc README](tomato42-ipc/README.md).
+You can interact with the server using various tools:
+- Custom clients in any programming language
+- Command-line tools like curl or netcat
+- The provided CLI and TUI applications
+
+For detailed documentation on the protocol, curl examples (including how to add water using curl), and example clients, see the [tomato42-ipc README](tomato42-ipc/README.md).
 
 ## Testing
 

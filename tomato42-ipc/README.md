@@ -129,6 +129,50 @@ if __name__ == "__main__":
 
 Since the protocol is based on simple JSON messages over TCP, it's easy to integrate with applications written in any programming language that supports TCP sockets and JSON parsing.
 
+### Using curl
+
+While curl is primarily designed for HTTP requests, you can also use it to interact with the tomato42-ipc server by sending raw data over a TCP connection. Here are some examples:
+
+#### Water the plant using curl
+
+To water the plant with an amount of 0.5:
+
+```bash
+echo '{"Water": {"amount": 0.5}}' | nc localhost 8042
+```
+
+Or using curl with the --connect-timeout option:
+
+```bash
+curl --no-buffer -v telnet://localhost:8042 -d '{"Water": {"amount": 0.5}}'
+```
+
+#### Get the current state
+
+```bash
+echo '{"GetState": null}' | nc localhost 8042
+```
+
+#### Step the simulation
+
+```bash
+echo '{"Step": {"seconds": 10}}' | nc localhost 8042
+```
+
+#### Set the light level
+
+```bash
+echo '{"SetLight": {"level": 0.7}}' | nc localhost 8042
+```
+
+#### Set the temperature
+
+```bash
+echo '{"SetTemp": {"celsius": 25.0}}' | nc localhost 8042
+```
+
+Note: When using curl or netcat (nc) with the tomato42-ipc server, you'll need to handle the newline character that terminates each message. The examples above should work on most Unix-like systems.
+
 ## Why TCP Instead of REST?
 
 The tomato42-ipc component uses a TCP-based JSON protocol rather than a REST API. This design choice was made to optimize for real-time updates, bidirectional communication, and efficient handling of frequent, small messages.
