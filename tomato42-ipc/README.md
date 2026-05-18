@@ -14,7 +14,7 @@ The tomato42-ipc server provides a TCP-based interface for controlling and monit
 cargo run --bin tomato42-ipc [port]
 ```
 
-If no port is specified, the server will listen on the default port 8042.
+If no port is specified, the server will listen on the default port 8043.
 
 ### Protocol
 
@@ -104,19 +104,19 @@ def main():
     sock = connect_to_tomato()
 
     # Get the current state
-    response = send_command({"GetState": None})
+    response = send_command(sock, {"GetState": None})
     print("Initial state:", response)
 
     # Water the plant
-    response = send_command({"Water": {"amount": 0.5}})
+    response = send_command(sock, {"Water": {"amount": 0.5}})
     print("After watering:", response)
 
     # Set the light level
-    response = send_command({"SetLight": {"level": 0.7}})
+    response = send_command(sock, {"SetLight": {"level": 0.7}})
     print("After setting light:", response)
 
     # Step the simulation
-    response = send_command({"Step": {"seconds": 10}})
+    response = send_command(sock, {"Step": {"seconds": 10}})
     print("After stepping:", response)
 
     sock.close()
@@ -128,6 +128,52 @@ if __name__ == "__main__":
 ## Integration with Other Languages
 
 Since the protocol is based on simple JSON messages over TCP, it's easy to integrate with applications written in any programming language that supports TCP sockets and JSON parsing.
+
+### Using netcat
+
+You can interact with the server using `nc` (netcat). The server uses a persistent TCP connection with newline-delimited JSON, so use `-q` to close after receiving the response:
+
+#### Get the current state
+
+```bash
+echo '{"GetState":null}' | nc -q 1 localhost 8043
+```
+
+#### Water the plant
+
+```bash
+echo '{"Water":{"amount":0.5}}' | nc -q 1 localhost 8043
+```
+
+#### Step the simulation
+
+```bash
+echo '{"Step":{"seconds":10}}' | nc -q 1 localhost 8043
+```
+
+#### Set the light level
+
+```bash
+echo '{"SetLight":{"level":0.7}}' | nc -q 1 localhost 8043
+```
+
+#### Set the temperature
+
+```bash
+echo '{"SetTemp":{"celsius":25.0}}' | nc -q 1 localhost 8043
+```
+
+#### Send multiple commands in one session
+
+```bash
+nc localhost 8043 <<'EOF'
+{"GetState":null}
+{"Water":{"amount":0.3}}
+{"Step":{"seconds":10}}
+EOF
+```
+
+Note: `curl` cannot be used here — this is a raw TCP protocol, not HTTP. Use `nc`, `socat`, or a custom client.
 
 ## Why TCP Instead of REST?
 

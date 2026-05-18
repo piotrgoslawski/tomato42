@@ -3,15 +3,19 @@
 //! This server allows multiple clients to connect and interact with a shared
 //! tomato plant simulation instance over TCP.
 
+use chrono::Local;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use tomato42_core::{Action, TomatoState, step};
+use tomato42_core::{step, Action, TomatoState};
 use tomato42_protocol::{
-    DEFAULT_PORT, IPCRequest, IPCResponse, SerializableTomatoState, SerializableTomatoEvent,
+    IPCRequest, IPCResponse, SerializableTomatoEvent, SerializableTomatoState, DEFAULT_PORT,
 };
+
+const LOG_FILE: &str = "tomato42_state.log";
 
 /// Convert a TomatoState to its serializable representation.
 fn to_serializable_state(state: &TomatoState) -> SerializableTomatoState {
@@ -30,14 +34,56 @@ fn to_serializable_state(state: &TomatoState) -> SerializableTomatoState {
 /// Convert a core Event to its serializable representation.
 fn to_serializable_event(event: &tomato42_core::Event) -> SerializableTomatoEvent {
     match event {
-        tomato42_core::Event::StageChange { from, to } => {
-            SerializableTomatoEvent::StageChange {
-                from: format!("{:?}", from),
-                to: format!("{:?}", to),
-            }
-        }
+        tomato42_core::Event::StageChange { from, to } => SerializableTomatoEvent::StageChange {
+            from: format!("{:?}", from),
+            to: format!("{:?}", to),
+        },
         tomato42_core::Event::WiltRisk => SerializableTomatoEvent::WiltRisk,
         tomato42_core::Event::Death => SerializableTomatoEvent::Death,
+    }
+}
+
+/// Log a state change to the log file.
+async fn log_state_change(action: &str, state: &TomatoState, events: &[SerializableTomatoEvent]) {
+    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+
+    let mut log_entry = format!(
+        "[{}] action={} time={}s stage={:?} moisture={:.3} biomass={:.3} stress={:.3} health={:.3} temp={:.1}C light={:.2}",
+        timestamp,
+        action,
+        state.time.as_secs(),
+        state.stage,
+        state.soil_moisture,
+        state.biomass,
+        state.stress,
+        state.health,
+        state.temperature,
+        state.light_level,
+    );
+
+    if !events.is_empty() {
+        let event_strs: Vec<String> = events
+            .iter()
+            .map(|e| match e {
+                SerializableTomatoEvent::StageChange { from, to } => {
+                    format!("StageChange({}->{}", from, to)
+                }
+                SerializableTomatoEvent::WiltRisk => "WiltRisk".to_string(),
+                SerializableTomatoEvent::Death => "Death".to_string(),
+            })
+            .collect();
+        log_entry.push_str(&format!(" events=[{}]", event_strs.join(", ")));
+    }
+
+    log_entry.push('\n');
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(LOG_FILE)
+        .await
+    {
+        let _ = file.write_all(log_entry.as_bytes()).await;
     }
 }
 
@@ -52,12 +98,15 @@ async fn main() {
     };
 
     println!("Starting tomato42 IPC server on port {}", port);
+    println!("Logging state changes to: {}", LOG_FILE);
 
     // Create shared state using tokio's async-safe Mutex
     let state = Arc::new(Mutex::new(TomatoState::new()));
 
     // Bind to the specified port
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await.unwrap();
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        .await
+        .unwrap();
     println!("Server listening on 127.0.0.1:{}", port);
 
     // Accept connections
@@ -82,10 +131,7 @@ async fn main() {
     }
 }
 
-async fn handle_connection(
-    socket: TcpStream,
-    state: Arc<Mutex<TomatoState>>,
-) {
+async fn handle_connection(socket: TcpStream, state: Arc<Mutex<TomatoState>>) {
     let (read_half, mut write_half) = socket.into_split();
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
@@ -118,10 +164,7 @@ async fn handle_connection(
     println!("Connection closed");
 }
 
-async fn process_command(
-    command: &str,
-    state: &Arc<Mutex<TomatoState>>,
-) -> IPCResponse {
+async fn process_command(command: &str, state: &Arc<Mutex<TomatoState>>) -> IPCResponse {
     // Parse the command as JSON
     let request: Result<IPCRequest, _> = serde_json::from_str(command);
 
@@ -131,11 +174,11 @@ async fn process_command(
 
             match req {
                 IPCRequest::GetState => {
-                    // Just return the current state
+                    // Just return the current state, no logging needed
                     IPCResponse {
                         success: true,
                         message: "Current state".to_string(),
-                        state: Some(to_serializable_state(&*state_guard)),
+                        state: Some(to_serializable_state(&state_guard)),
                         events: vec![],
                     }
                 }
@@ -151,23 +194,24 @@ async fn process_command(
                     *state_guard = result.state.clone();
 
                     // Convert events
-                    let events = result.events.iter()
-                        .map(to_serializable_event)
-                        .collect();
+                    let events: Vec<_> = result.events.iter().map(to_serializable_event).collect();
+
+                    // Log the state change
+                    log_state_change(&format!("Step({}s)", seconds), &state_guard, &events).await;
 
                     IPCResponse {
                         success: true,
                         message: format!("Stepped simulation by {} seconds", seconds),
-                        state: Some(to_serializable_state(&*state_guard)),
+                        state: Some(to_serializable_state(&state_guard)),
                         events,
                     }
                 }
                 IPCRequest::Water { amount } => {
-                    if amount < 0.0 || amount > 1.0 {
+                    if !(0.0..=1.0).contains(&amount) {
                         return IPCResponse {
                             success: false,
                             message: "Water amount must be between 0 and 1".to_string(),
-                            state: Some(to_serializable_state(&*state_guard)),
+                            state: Some(to_serializable_state(&state_guard)),
                             events: vec![],
                         };
                     }
@@ -183,23 +227,25 @@ async fn process_command(
                     *state_guard = result.state.clone();
 
                     // Convert events
-                    let events = result.events.iter()
-                        .map(to_serializable_event)
-                        .collect();
+                    let events: Vec<_> = result.events.iter().map(to_serializable_event).collect();
+
+                    // Log the state change
+                    log_state_change(&format!("Water({:.2})", amount), &state_guard, &events)
+                        .await;
 
                     IPCResponse {
                         success: true,
                         message: format!("Watered plant with amount: {:.2}", amount),
-                        state: Some(to_serializable_state(&*state_guard)),
+                        state: Some(to_serializable_state(&state_guard)),
                         events,
                     }
                 }
                 IPCRequest::SetLight { level } => {
-                    if level < 0.0 || level > 1.0 {
+                    if !(0.0..=1.0).contains(&level) {
                         return IPCResponse {
                             success: false,
                             message: "Light level must be between 0 and 1".to_string(),
-                            state: Some(to_serializable_state(&*state_guard)),
+                            state: Some(to_serializable_state(&state_guard)),
                             events: vec![],
                         };
                     }
@@ -215,14 +261,16 @@ async fn process_command(
                     *state_guard = result.state.clone();
 
                     // Convert events
-                    let events = result.events.iter()
-                        .map(to_serializable_event)
-                        .collect();
+                    let events: Vec<_> = result.events.iter().map(to_serializable_event).collect();
+
+                    // Log the state change
+                    log_state_change(&format!("SetLight({:.2})", level), &state_guard, &events)
+                        .await;
 
                     IPCResponse {
                         success: true,
                         message: format!("Set light level to: {:.2}", level),
-                        state: Some(to_serializable_state(&*state_guard)),
+                        state: Some(to_serializable_state(&state_guard)),
                         events,
                     }
                 }
@@ -238,14 +286,16 @@ async fn process_command(
                     *state_guard = result.state.clone();
 
                     // Convert events
-                    let events = result.events.iter()
-                        .map(to_serializable_event)
-                        .collect();
+                    let events: Vec<_> = result.events.iter().map(to_serializable_event).collect();
+
+                    // Log the state change
+                    log_state_change(&format!("SetTemp({:.1}C)", celsius), &state_guard, &events)
+                        .await;
 
                     IPCResponse {
                         success: true,
                         message: format!("Set temperature to: {:.2}°C", celsius),
-                        state: Some(to_serializable_state(&*state_guard)),
+                        state: Some(to_serializable_state(&state_guard)),
                         events,
                     }
                 }

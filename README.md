@@ -12,7 +12,7 @@ A boring, deterministic tomato plant simulator that favors correctness, testabil
 
 ## Architecture
 
-The project is split into four crates:
+The project is split into five crates:
 
 1. **tomato42-core**: Pure simulation logic with no IO, no async, and no threads. Provides a deterministic `step(state, action, dt) -> StepResult` API.
 
@@ -21,6 +21,8 @@ The project is split into four crates:
 3. **tomato42-tui**: Text-based user interface with time-series graphs showing the internal state of the tomato plant.
 
 4. **tomato42-ipc**: IPC server that allows external applications to interact with the tomato plant simulator over a network connection using a JSON-based protocol.
+
+5. **tomato42-protocol**: Shared serialization types (DTOs) used for communication between the IPC server and its clients.
 
 ## Tomato Model
 
@@ -56,20 +58,29 @@ The simulator implements the following dynamics:
 
 All values are clamped to their valid ranges, and there are no magic jumps in state.
 
-## Usage
+## Prerequisites
 
-### Core Library
+- [Rust](https://www.rust-lang.org/tools/install) (edition 2021 or later)
 
-The core library provides a simple API for simulating tomato plant growth:
+## Building
 
-- Create a new tomato state with `TomatoState::new()`
-- Use the `step()` function to advance the simulation with an action
-- Process any events that occurred during the step
-- Continue the simulation with the new state
+Build all crates:
+
+```
+cargo build
+```
+
+Build in release mode:
+
+```
+cargo build --release
+```
+
+Release binaries will be in `target/release/`.
+
+## Running
 
 ### CLI
-
-Run the CLI with:
 
 ```
 cargo run --bin tomato42-cli
@@ -135,18 +146,43 @@ The server uses a simple JSON-based protocol for communication:
 - The server responds with JSON objects containing the current state and any events
 - All connected clients receive updates when the state changes
 
-For detailed documentation on the protocol and example clients, see the [tomato42-ipc README](tomato42-ipc/README.md).
+You can interact with the server using various tools:
+- Custom clients in any programming language
+- Command-line tools like curl or netcat
+- The provided CLI and TUI applications
+
+For detailed documentation on the protocol, curl examples (including how to add water using curl), and example clients, see the [tomato42-ipc README](tomato42-ipc/README.md).
 
 ## Testing
 
-The core simulation logic includes unit tests for:
-- Value bounds (clamping)
-- Causality (watering increases moisture)
-- Invariants (dead state is absorbing)
-- Deterministic regression with fixed inputs
-
-Run the tests with:
+Run all tests (unit + integration):
 
 ```
-cargo test
+cargo test --all
 ```
+
+### Core unit tests (22 tests)
+
+- **Invariants**: value bounds preserved across extreme inputs, determinism across identical runs
+- **Evapotranspiration**: moisture decreases over time
+- **Stress mechanics**: low moisture and extreme temperature cause stress, sustained stress kills the plant
+- **Growth**: biomass increases under optimal conditions, no growth without light
+- **Lifecycle**: full Seed → Fruiting stage progression, stage order is monotonic
+- **Dead state**: no growth possible, health stays at zero
+- **Actions**: Water, SetLight, SetTemp take effect correctly
+- **Events**: Death, StageChange, and WiltRisk events emitted at correct thresholds
+
+### IPC integration tests (7 tests)
+
+- Server returns correct initial state
+- Water, Step, SetLight, SetTemp commands work end-to-end over TCP
+- Invalid inputs (out-of-range values, malformed JSON) are rejected
+- Multiple steps accumulate time correctly
+
+## CI
+
+GitHub Actions runs on every push and PR to `main`:
+
+- `cargo fmt --all --check` — formatting
+- `cargo clippy --all-targets -- -D warnings` — linting
+- `cargo test --all` — all tests

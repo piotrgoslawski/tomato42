@@ -16,8 +16,8 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::TcpStream;
 use tomato42_protocol::{
-    DEFAULT_HOST, DEFAULT_PORT, IPCRequest, IPCResponse,
-    SerializableTomatoState, SerializableTomatoEvent,
+    IPCRequest, IPCResponse, SerializableTomatoEvent, SerializableTomatoState, DEFAULT_HOST,
+    DEFAULT_PORT,
 };
 
 /// Connects to the IPC server and returns a TCP stream
@@ -29,7 +29,7 @@ fn connect_to_server() -> Result<TcpStream, io::Error> {
         Ok(stream) => {
             println!("Connected to IPC server");
             Ok(stream)
-        },
+        }
         Err(e) => {
             eprintln!("Failed to connect to IPC server: {}", e);
             eprintln!("Make sure the tomato42-ipc server is running with:");
@@ -59,7 +59,10 @@ fn send_command(stream: &mut TcpStream, request: IPCRequest) -> Result<IPCRespon
         Err(e) => {
             eprintln!("Failed to parse server response: {}", e);
             eprintln!("Response was: {}", response_str);
-            Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid server response"))
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid server response",
+            ))
         }
     }
 }
@@ -94,7 +97,7 @@ fn main() {
             } else {
                 eprintln!("Failed to get initial state");
             }
-        },
+        }
         Err(e) => {
             eprintln!("Error getting initial state: {}", e);
             return;
@@ -125,7 +128,7 @@ fn main() {
 
                 match parts[1].parse::<f32>() {
                     Ok(amount) => {
-                        if amount < 0.0 || amount > 1.0 {
+                        if !(0.0..=1.0).contains(&amount) {
                             println!("Error: Amount must be between 0 and 1");
                             continue;
                         }
@@ -138,13 +141,13 @@ fn main() {
                                 } else {
                                     println!("Error: {}", response.message);
                                 }
-                            },
+                            }
                             Err(e) => println!("Error communicating with server: {}", e),
                         }
-                    },
+                    }
                     Err(_) => println!("Error: Invalid amount value"),
                 }
-            },
+            }
             "light" => {
                 if parts.len() < 2 {
                     println!("Error: Missing level parameter");
@@ -153,7 +156,7 @@ fn main() {
 
                 match parts[1].parse::<f32>() {
                     Ok(level) => {
-                        if level < 0.0 || level > 1.0 {
+                        if !(0.0..=1.0).contains(&level) {
                             println!("Error: Level must be between 0 and 1");
                             continue;
                         }
@@ -166,13 +169,13 @@ fn main() {
                                 } else {
                                     println!("Error: {}", response.message);
                                 }
-                            },
+                            }
                             Err(e) => println!("Error communicating with server: {}", e),
                         }
-                    },
+                    }
                     Err(_) => println!("Error: Invalid level value"),
                 }
-            },
+            }
             "temp" => {
                 if parts.len() < 2 {
                     println!("Error: Missing temperature parameter");
@@ -189,13 +192,13 @@ fn main() {
                                 } else {
                                     println!("Error: {}", response.message);
                                 }
-                            },
+                            }
                             Err(e) => println!("Error communicating with server: {}", e),
                         }
-                    },
+                    }
                     Err(_) => println!("Error: Invalid temperature value"),
                 }
-            },
+            }
             "step" => {
                 let seconds = if parts.len() > 1 {
                     match parts[1].parse::<u64>() {
@@ -217,38 +220,38 @@ fn main() {
                         } else {
                             println!("Error: {}", response.message);
                         }
-                    },
+                    }
                     Err(e) => println!("Error communicating with server: {}", e),
                 }
-            },
-            "status" => {
-                match send_command(&mut stream, IPCRequest::GetState) {
-                    Ok(response) => {
-                        if response.success {
-                            if let Some(state) = response.state {
-                                print_status(&state);
-                            }
-                        } else {
-                            println!("Error: {}", response.message);
+            }
+            "status" => match send_command(&mut stream, IPCRequest::GetState) {
+                Ok(response) => {
+                    if response.success {
+                        if let Some(state) = response.state {
+                            print_status(&state);
                         }
-                    },
-                    Err(e) => println!("Error communicating with server: {}", e),
+                    } else {
+                        println!("Error: {}", response.message);
+                    }
                 }
+                Err(e) => println!("Error communicating with server: {}", e),
             },
             "help" => {
                 println!("Commands:");
                 println!("  water <amount>     - Water the plant (amount between 0 and 1)");
                 println!("  light <level>      - Set light level (between 0 and 1)");
                 println!("  temp <celsius>     - Set temperature in Celsius");
-                println!("  step [seconds]     - Advance simulation by specified seconds (default: 1)");
+                println!(
+                    "  step [seconds]     - Advance simulation by specified seconds (default: 1)"
+                );
                 println!("  status             - Show current plant status");
                 println!("  help               - Show this help message");
                 println!("  exit               - Exit the simulator");
-            },
+            }
             "exit" => {
                 println!("Exiting tomato42 simulator. Goodbye!");
                 break;
-            },
+            }
             _ => {
                 println!("Unknown command: {}", command);
                 println!("Type 'help' for a list of commands");
@@ -283,13 +286,13 @@ fn print_events(events: &[SerializableTomatoEvent]) {
         match event {
             SerializableTomatoEvent::StageChange { from, to } => {
                 println!("  Plant advanced from {} to {} stage", from, to);
-            },
+            }
             SerializableTomatoEvent::WiltRisk => {
                 println!("  WARNING: Plant is at risk of wilting due to high stress!");
-            },
+            }
             SerializableTomatoEvent::Death => {
                 println!("  ALERT: Plant has died!");
-            },
+            }
         }
     }
     println!();
