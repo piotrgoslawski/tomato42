@@ -12,7 +12,7 @@ A boring, deterministic tomato plant simulator that favors correctness, testabil
 
 ## Architecture
 
-The project is split into five crates:
+The project is split into five Rust crates plus a separate Flutter project:
 
 1. **tomato42-core**: Pure simulation logic with no IO, no async, and no threads. Provides a deterministic `step(state, action, dt) -> StepResult` API.
 
@@ -23,6 +23,8 @@ The project is split into five crates:
 4. **tomato42-ipc**: IPC server that allows external applications to interact with the tomato plant simulator over a network connection using a JSON-based protocol.
 
 5. **tomato42-protocol**: Shared serialization types (DTOs) used for communication between the IPC server and its clients.
+
+6. **tomato42-gui**: Flutter desktop application (Linux) with the same functionality as the TUI. Talks to the IPC server over TCP; does not embed the simulation.
 
 ## Tomato Model
 
@@ -127,6 +129,21 @@ Controls:
 - `↑/↓` - Adjust water amount
 - `←/→` - Adjust light level
 - `+/-` - Adjust temperature
+
+### GUI (Flutter desktop)
+
+A Flutter desktop application that mirrors the TUI: four `fl_chart` time-series graphs (soil moisture, stress, health, biomass), a status header, action controls, and an events panel. Unlike the TUI, the GUI is **IPC-only** — if the server is unreachable it shows a retry screen instead of falling back to a local simulation.
+
+Build and run (from `tomato42-gui/`):
+
+```
+flutter pub get
+flutter run -d linux
+```
+
+Same keyboard controls as the TUI: `Space` step, `a` auto-step, `w`/`l`/`t` apply water/light/temperature, `↑/↓` adjust water, `←/→` adjust light, `+/-` adjust temperature. Buttons are also available for everything.
+
+Start the IPC server first (see below).
 
 ### IPC Server
 
